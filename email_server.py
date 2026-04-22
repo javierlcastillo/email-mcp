@@ -7,6 +7,16 @@ from mcp.server.fastmcp import FastMCP
 from typing import Annotated
 from dotenv import load_dotenv
 import os
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
+class TokenAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        token: request.headers.get("Authorization", "")
+        expected: f"Bearer {os.getenv('MCP_AUTH_TOKEN')}"
+        if token != expected:
+            return Response("Unauthorized", status_code=401)
+        return await call_next(request)
 
 # nombre del servidor que sera mostrado en Claude
 mcp = FastMCP("email-manager")
@@ -46,18 +56,11 @@ ACCOUNTS = {
         "user": os.getenv("SPAM_USER"),
         "password": os.getenv("SPAM_PASSWORD")
     },
-    # "school": {
+    # "outlook": {
     #     "imap_host": "outlook.office365.com",
     #     "smtp_host": "smtp.gmail.com",
     #     "smtp_port": 587,
-    #     "user": "A01658415@tec.mx",
-    #     "password": ""
-    # },
-    # "work": {
-    #     "imap_host": "outlook.office365.com",
-    #     "smtp_host": "smtp.gmail.com",
-    #     "smtp_port": 587,
-    #     "user": "javier.luiscastillo@ibm.com",
+    #     "user": "",
     #     "password": ""
     # }
 }
@@ -221,4 +224,5 @@ def delete_email(account: str, email_id: str, folder: str = "INBOX") -> str:
         mail.logout()
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.app.add_middleware(TokenAuthMiddleware)
+    mcp.run(transport="sse", host="0.0.0.0", port=8000)

@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: mailmcp
+    runtime: python
+    buildCommand: pip install uv && uv sync
+    startCommand: uv run email_server.py
+    envVars:
+      - key: PERSONAL_USER
+        sync: false
+      - key: PERSONAL_PASSWORD
+        sync: false
+      - key: SPAM_USER
+        sync: false
+      - key: SPAM_PASSWORD
+        sync: false
