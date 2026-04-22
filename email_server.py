@@ -12,7 +12,11 @@ from starlette.responses import Response
 
 class TokenAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        token: request.headers.get("Authorization", "")
+        # HEALTH CHECKS FOR UPTIME ROBOT OR SIMILAR
+        if request.url.path == "/health":
+            return await call_next(request)
+        
+        token: request.headers.get("Authorization", "") #type: ignore
         expected: f"Bearer {os.getenv('MCP_AUTH_TOKEN')}"
         if token != expected:
             return Response("Unauthorized", status_code=401)
@@ -224,5 +228,6 @@ def delete_email(account: str, email_id: str, folder: str = "INBOX") -> str:
         mail.logout()
 
 if __name__ == "__main__":
-    mcp.app.add_middleware(TokenAuthMiddleware)
+    app = mcp.sse_app()
+    app.add_middleware(TokenAuthMiddleware)
     mcp.run(transport="sse", host="0.0.0.0", port=8000)
