@@ -8,18 +8,20 @@ from typing import Annotated
 from dotenv import load_dotenv
 import os
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from starlette.responses import Response
 from starlette.responses import PlainTextResponse
 import uvicorn
 
 class TokenAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        # HEALTH CHECKS FOR UPTIME ROBOT OR SIMILAR
         if request.url.path == "/health":
             return await call_next(request)
-        
-        token: request.headers.get("Authorization", "") #type: ignore
-        expected: f"Bearer {os.getenv('MCP_AUTH_TOKEN')}"
+        token = request.headers.get("Authorization", "")
+        auth_token = os.getenv("MCP_AUTH_TOKEN")
+        if not auth_token:
+            return Response("Server misconfigured: missing MCP_AUTH_TOKEN", status_code=500)
+        expected = f"Bearer {auth_token}"
         if token != expected:
             return Response("Unauthorized", status_code=401)
         return await call_next(request)
@@ -29,7 +31,7 @@ mcp = FastMCP("email-manager")
 load_dotenv()
 
 # --- HEALTH CHECKER FOR UPTIME ROBOT ---
-@mcp.custom_route("/health", methods=[GET])
+@mcp.custom_route("/health", methods=["GET"])
 async def health (request: Request) -> PlainTextResponse:
     return PlainTextResponse("Server is OK", status_code=200)
 
@@ -237,4 +239,5 @@ def delete_email(account: str, email_id: str, folder: str = "INBOX") -> str:
 if __name__ == "__main__":
     app = mcp.sse_app()
     app.add_middleware(TokenAuthMiddleware)
+    app.add_route("/health", health, methods=["GET"])
     uvicorn.run(app, host="0.0.0.0", port=8000)
