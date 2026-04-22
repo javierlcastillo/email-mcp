@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import os
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+import uvicorn
 
 class TokenAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -230,4 +231,4 @@ def delete_email(account: str, email_id: str, folder: str = "INBOX") -> str:
 if __name__ == "__main__":
     app = mcp.sse_app()
     app.add_middleware(TokenAuthMiddleware)
-    mcp.run(transport="sse", host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
