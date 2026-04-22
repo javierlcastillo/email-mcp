@@ -1,0 +1,14 @@
+﻿{
+  "mcpServers": {
+    "email-manager": {
+      "command": "C:\\Users\\jazer\\.local\\bin\\uv.exe",
+      "args": [
+        "run",
+        "--project",
+        "C:\\Users\\jazer\\Documents\\PersonalDev\\mailMCP",
+        "C:\\Users\\jazer\\Documents\\PersonalDev\\mailMCP\\email_server.py"
+      ],
+      "cwd": "C:\\Users\\jazer\\Documents\\PersonalDev\\mailMCP"
+    }
+  }
+}
