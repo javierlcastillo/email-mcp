@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import os
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+from starlette.responses import PlainTextResponse
 import uvicorn
 
 class TokenAuthMiddleware(BaseHTTPMiddleware):
@@ -26,6 +27,11 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
 # nombre del servidor que sera mostrado en Claude
 mcp = FastMCP("email-manager")
 load_dotenv()
+
+# --- HEALTH CHECKER FOR UPTIME ROBOT ---
+@mcp.custom_route("/health", methods=[GET])
+async def health (request: Request) -> PlainTextResponse:
+    return PlainTextResponse("Server is OK", status_code=200)
 
 # Helper function to extract email body
 def extract_body(msg) -> str:
