@@ -245,4 +245,10 @@ if __name__ == "__main__":
     app = mcp.sse_app()
     app.add_middleware(TokenAuthMiddleware)
     app.add_route("/health", health, methods=["GET"])
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        proxy_headers=True,        # confía en headers del proxy
+        forwarded_allow_ips="*"    # acepta cualquier IP de proxy
+    )
