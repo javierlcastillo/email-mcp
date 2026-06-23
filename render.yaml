@@ -3,7 +3,7 @@ services:
     name: mailmcp
     runtime: python
     buildCommand: pip install uv && uv sync
-    startCommand: uv run email_server.py
+    startCommand: uv run main.py
     envVars:
       - key: MCP_AUTH_TOKEN
         sync: false
