@@ -6,10 +6,16 @@ import os
 from email.mime.text import MIMEText
 from typing import Annotated
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
-mcp = FastMCP("email-manager")
+mcp = FastMCP(
+    "email-manager",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    )
+)
 
 ACCOUNTS = {
     "lucaso": {
