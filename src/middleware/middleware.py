@@ -5,7 +5,7 @@ from starlette.responses import Response
 
 class TokenAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if request.url.path == "/health":
+        if request.url.path == "/health" or request.url.path.startswith("/messages/"):
             return await call_next(request)
 
         auth_token = os.getenv("MCP_AUTH_TOKEN")
