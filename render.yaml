@@ -15,3 +15,11 @@ services:
         sync: false
       - key: SPAM_PASSWORD
         sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: PERSONAL_REFRESH_TOKEN
+        sync: false
+      - key: SPAM_REFRESH_TOKEN
+        sync: false
