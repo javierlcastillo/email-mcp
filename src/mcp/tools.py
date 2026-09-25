@@ -8,7 +8,10 @@ import base64
 import urllib.error
 import urllib.parse
 import urllib.request
+from email.message import Message
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html.parser import HTMLParser
 from typing import Annotated
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -67,7 +70,8 @@ def extract_body(msg) -> str:
 
 
 def fetch_summary(mail, uid: bytes) -> dict:
-    _, msg_data = mail.uid("FETCH", uid, "(RFC822)")
+    # PEEK so listing doesn't mark emails as read
+    _, msg_data = mail.uid("FETCH", uid, "(BODY.PEEK[])")
     msg = email.message_from_bytes(msg_data[0][1])
     body = extract_body(msg)
     return {
@@ -105,7 +109,7 @@ def move_to_trash(mail, uids: list[str]) -> str:
     return trash
 
 
-def send_via_gmail_api(cfg: dict, msg: MIMEText) -> None:
+def send_via_gmail_api(cfg: dict, msg: Message) -> None:
     """Send through the Gmail REST API over HTTPS, since Render blocks SMTP ports."""
     token_req = urllib.request.Request(
         "https://oauth2.googleapis.com/token",
@@ -131,14 +135,14 @@ def send_via_gmail_api(cfg: dict, msg: MIMEText) -> None:
         pass
 
 
-def send_via_smtp(cfg: dict, msg: MIMEText) -> None:
+def send_via_smtp(cfg: dict, msg: Message) -> None:
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=15) as server:
         server.starttls()
         server.login(cfg["user"], cfg["password"])
         server.send_message(msg)
 
 
-def deliver(cfg: dict, msg: MIMEText) -> str | None:
+def deliver(cfg: dict, msg: Message) -> str | None:
     """Send via Gmail API when a refresh token is set, else SMTP; returns an error message or None."""
     try:
         if cfg["refresh_token"]:
@@ -150,6 +154,48 @@ def deliver(cfg: dict, msg: MIMEText) -> str | None:
     except OSError as e:
         return f"Failed to send email: {e}"
     return None
+
+
+class _HTMLToText(HTMLParser):
+    BLOCK_TAGS = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table", "hr"}
+
+    def __init__(self):
+        super().__init__()
+        self.parts: list[str] = []
+        self.skip = 0
+        self.href: str | None = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("style", "script", "head"):
+            self.skip += 1
+        elif tag in self.BLOCK_TAGS:
+            self.parts.append("\n")
+        elif tag == "a":
+            self.href = dict(attrs).get("href")
+
+    def handle_endtag(self, tag):
+        if tag in ("style", "script", "head"):
+            self.skip = max(0, self.skip - 1)
+        elif tag in self.BLOCK_TAGS:
+            self.parts.append("\n")
+        elif tag in ("td", "th"):
+            self.parts.append("  ")
+        elif tag == "a" and self.href:
+            # Keep link targets visible in the plain-text version
+            if self.href.startswith(("http://", "https://", "mailto:")):
+                self.parts.append(f" ({self.href})")
+            self.href = None
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.parts.append(data)
+
+
+def html_to_text(html: str) -> str:
+    parser = _HTMLToText()
+    parser.feed(html)
+    lines = (re.sub(r"[ \t\r\f\v]+", " ", line).strip() for line in "".join(parser.parts).splitlines())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -190,6 +236,51 @@ def send_email(account: str, to: str, subject: str, body: str) -> str:
 
     error = deliver(cfg, msg)
     return error or f"Email sent to {to} successfully."
+
+
+@mcp.tool()
+def send_html_email(
+    account: str,
+    to: str,
+    subject: str,
+    html: str,
+    text: str | None = None,
+    cc: str | None = None,
+    bcc: str | None = None,
+    reply_to: str | None = None,
+) -> str:
+    """Send a visually rich HTML email. A plain-text version is included automatically
+    (derived from the HTML unless `text` is given). to/cc/bcc accept comma-separated addresses.
+
+    Write the HTML for email clients (Gmail, Outlook, Apple Mail, phones), not browsers:
+    - Put all CSS inline in style="" attributes; <style> blocks and external CSS are often stripped.
+    - Lay out with nested <table role="presentation"> (cellpadding/cellspacing="0"), centered,
+      max width ~600px; avoid flexbox, grid, position, and float.
+    - No JavaScript, forms, iframes, video, or web fonts; use font stacks like Arial, Helvetica, sans-serif.
+    - Images only from absolute https:// URLs, with alt text and explicit width; never base64.
+    - Buttons: a padded table cell with background color containing an <a> with inline styles.
+    - Use solid background colors with strong text contrast so it stays readable in dark mode.
+    - Keep the most important content near the top; many clients show only a short preview."""
+    cfg = ACCOUNTS.get(account)
+    if not cfg:
+        return f"Account '{account}' not found."
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = cfg["user"]
+    msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
+    if bcc:
+        msg["Bcc"] = bcc
+    if reply_to:
+        msg["Reply-To"] = reply_to
+    # Order matters: clients render the last alternative they support, so HTML goes last
+    msg.attach(MIMEText(text or html_to_text(html), "plain", "utf-8"))
+    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    error = deliver(cfg, msg)
+    return error or f"HTML email sent to {to} successfully."
 
 
 @mcp.tool()
@@ -239,7 +330,7 @@ def get_email(account: str, email_id: str, folder: str = "INBOX") -> str:
     mail.login(cfg["user"], cfg["password"])
     try:
         mail.select(folder)
-        _, msg_data = mail.uid("FETCH", email_id, "(RFC822)")
+        _, msg_data = mail.uid("FETCH", email_id, "(BODY.PEEK[])")
         if not msg_data[0]:
             return f"Email with ID '{email_id}' not found."
 
