@@ -138,6 +138,20 @@ def send_via_smtp(cfg: dict, msg: MIMEText) -> None:
         server.send_message(msg)
 
 
+def deliver(cfg: dict, msg: MIMEText) -> str | None:
+    """Send via Gmail API when a refresh token is set, else SMTP; returns an error message or None."""
+    try:
+        if cfg["refresh_token"]:
+            send_via_gmail_api(cfg, msg)
+        else:
+            send_via_smtp(cfg, msg)
+    except urllib.error.HTTPError as e:
+        return f"Gmail API error {e.code}: {e.read().decode(errors='ignore')}"
+    except OSError as e:
+        return f"Failed to send email: {e}"
+    return None
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request) -> PlainTextResponse:
     return PlainTextResponse("Server is OK", status_code=200)
@@ -174,17 +188,8 @@ def send_email(account: str, to: str, subject: str, body: str) -> str:
     msg["From"] = cfg["user"]
     msg["To"] = to
 
-    try:
-        if cfg["refresh_token"]:
-            send_via_gmail_api(cfg, msg)
-        else:
-            send_via_smtp(cfg, msg)
-    except urllib.error.HTTPError as e:
-        return f"Gmail API error {e.code}: {e.read().decode(errors='ignore')}"
-    except OSError as e:
-        return f"Failed to send email: {e}"
-
-    return f"Email sent to {to} successfully."
+    error = deliver(cfg, msg)
+    return error or f"Email sent to {to} successfully."
 
 
 @mcp.tool()
@@ -307,3 +312,86 @@ def delete_emails(account: str, email_ids: list[str], folder: str = "INBOX") -> 
         }, ensure_ascii=False, indent=2)
     finally:
         mail.logout()
+
+
+@mcp.tool()
+def flag_email(account: str, email_id: str, folder: str = "INBOX", flagged: bool = True) -> str:
+    """Star (flag) an email by its UID so it stands out in Gmail on any device; flagged=False removes the star"""
+    cfg = ACCOUNTS.get(account)
+    if not cfg:
+        return f"Account '{account}' not found."
+
+    mail = imaplib.IMAP4_SSL(cfg["imap_host"])
+    mail.login(cfg["user"], cfg["password"])
+    try:
+        mail.select(folder)
+        _, msg_data = mail.uid("FETCH", email_id, "(UID)")
+        if not msg_data[0]:
+            return f"Email with ID '{email_id}' not found."
+
+        mail.uid("STORE", email_id, "+FLAGS" if flagged else "-FLAGS", "(\\Flagged)")
+        return f"Email with ID '{email_id}' {'starred' if flagged else 'unstarred'}."
+    finally:
+        mail.logout()
+
+
+@mcp.tool()
+def unsubscribe(account: str, email_id: str, folder: str = "INBOX", dry_run: bool = False) -> str:
+    """Unsubscribe from a mailing list using the email's List-Unsubscribe header (one-click or mailto).
+    With dry_run=True, only reports which method would be used."""
+    cfg = ACCOUNTS.get(account)
+    if not cfg:
+        return f"Account '{account}' not found."
+
+    mail = imaplib.IMAP4_SSL(cfg["imap_host"])
+    mail.login(cfg["user"], cfg["password"])
+    try:
+        mail.select(folder)
+        # PEEK so reading the headers doesn't mark the email as read
+        _, msg_data = mail.uid("FETCH", email_id, "(BODY.PEEK[HEADER])")
+        if not msg_data[0]:
+            return f"Email with ID '{email_id}' not found."
+        headers = email.message_from_bytes(msg_data[0][1])
+    finally:
+        mail.logout()
+
+    links = [re.sub(r"\s+", "", link) for link in re.findall(r"<([^>]+)>", headers.get("List-Unsubscribe", ""))]
+    https_link = next((link for link in links if link.lower().startswith("https://")), None)
+    mailto_link = next((link for link in links if link.lower().startswith("mailto:")), None)
+    one_click = "one-click" in headers.get("List-Unsubscribe-Post", "").lower()
+
+    def report(method: str, target: str | None, result: str) -> str:
+        return json.dumps({"method": method, "target": target, "result": result}, ensure_ascii=False, indent=2)
+
+    if https_link and one_click:
+        if dry_run:
+            return report("one-click", https_link, "dry run: would POST List-Unsubscribe=One-Click")
+        req = urllib.request.Request(
+            https_link,
+            data=b"List-Unsubscribe=One-Click",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return report("one-click", https_link, f"HTTP {resp.status}: unsubscribed")
+        except urllib.error.HTTPError as e:
+            return report("one-click", https_link, f"HTTP {e.code}: sender rejected the request")
+        except OSError as e:
+            return report("one-click", https_link, f"request failed: {e}")
+
+    if mailto_link:
+        parsed = urllib.parse.urlparse(mailto_link)
+        to = urllib.parse.unquote(parsed.path)
+        params = urllib.parse.parse_qs(parsed.query)
+        if dry_run:
+            return report("mailto", to, "dry run: would send an unsubscribe email")
+        msg = MIMEText(params.get("body", ["unsubscribe"])[0])
+        msg["Subject"] = params.get("subject", ["unsubscribe"])[0]
+        msg["From"] = cfg["user"]
+        msg["To"] = to
+        error = deliver(cfg, msg)
+        return report("mailto", to, error or "unsubscribe email sent")
+
+    if https_link:
+        return report("manual", https_link, "no one-click support: open this link to unsubscribe")
+    return report("none", None, "no List-Unsubscribe header: look for an unsubscribe link in the body")
